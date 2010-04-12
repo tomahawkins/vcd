@@ -1,0 +1,39 @@
+name:    vcd
+version: 0.0.0
+
+category: Data
+
+synopsis: Tools for writing VCD files.
+
+description:
+  VCD (value change dump) is a format for capturing digital and analog waveforms.
+  GTKWave is a popular viewer of VCD files.
+
+author:     Tom Hawkins <tomahawkins@gmail.com>
+maintainer: Tom Hawkins <tomahawkins@gmail.com>
+
+license:      BSD3
+license-file: LICENSE
+
+homepage: http://tomahawkins.org
+
+build-type:    Simple
+cabal-version: >= 1.6
+
+library
+    build-depends:
+        base       >= 4.2     && < 5
+
+    exposed-modules:
+        Data.VCD
+
+--    extensions:
+
+    if impl(ghc > 6.8)
+          ghc-options: -fwarn-tabs
+    ghc-options:       -W
+
+source-repository head
+    type:     git
+    location: git://github.com/tomahawkins/vcd.git
+
