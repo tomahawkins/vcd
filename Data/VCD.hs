@@ -1,10 +1,17 @@
+-- | Generating and parsing Value Change Dump (VCD) files.
 module Data.VCD
-  ( VCDHandle
+  ( 
+  -- * VCD Generation
+    VCDHandle
   , Timescale (..)
   , newVCD
   , scope
   , var
   , step
+  -- * VCD Parsing
+  , VCD        (..)
+  , Definition (..)
+  , Value      (..)
   , parseVCD
   ) where
 
@@ -142,7 +149,7 @@ identCodes = map code [0..]
 data Token
   = End
   | Timescale
-  | Scope
+  | Scope'
   | Var
   | UpScope
   | EndDefinitions
@@ -153,15 +160,16 @@ data Token
 
 type VCDParser = GenParser Token ()
 
-data VCD = VCD deriving Show
-
-parseVCD :: String -> Either ParseError VCD
-parseVCD = parse vcd "unknown" . map token . words
+-- | Parse VCD data.
+parseVCD :: String -> VCD
+parseVCD a = case parse vcd "unknown" $ map token $ words a of
+  Left err -> error $ show err
+  Right vcd -> vcd
   where
   token a = case a of
     "$end"                -> End
     "$timescale"          -> Timescale
-    "$scope"              -> Scope
+    "$scope"              -> Scope'
     "$var"                -> Var
     "$upscope"            -> UpScope
     "$enddefinitions"     -> EndDefinitions
@@ -178,6 +186,13 @@ str = tok' $ \ a -> case a of
   String a -> Just a
   _        -> Nothing
 
+data VCD = VCD Timescale [Definition] [(Int, [(String, Value)])] deriving Show
+
+data Value = Bool Bool | Bits [Bool] | Double Double deriving Show
+
+--data Definition = Scope String [Definition] | Var String
+data Definition = Definition deriving Show
+
 vcd :: VCDParser VCD
 vcd = do
   ts <- timescale
@@ -185,12 +200,12 @@ vcd = do
   tok EndDefinitions
   tok End
   tok DumpVars
-  many str
+  initValues <- values
   tok End
-  step'
-  many sample
+  initTime <- step'
+  samples <- many sample >>= return . ((initTime, initValues):)
   eof
-  return VCD
+  return $ VCD ts defs samples
 
 timescale :: VCDParser Timescale
 timescale = do
@@ -206,20 +221,21 @@ timescale = do
     "ps" -> return PS
     _    -> error $ "invalid timescale: " ++ sc
 
-definitions :: VCDParser [()]
+definitions :: VCDParser [Definition]
 definitions = many $ scope' <|> var'
 
-scope' :: VCDParser ()
+scope' :: VCDParser Definition
 scope' = do
-  tok Scope
+  tok Scope'
   str
   name <- str
   tok End
   defs <- definitions
   tok UpScope
   tok End
+  return Definition
 
-var' :: VCDParser ()
+var' :: VCDParser Definition
 var' = do
   tok Var
   typ   <- str
@@ -227,16 +243,28 @@ var' = do
   code  <- str
   name  <- str
   tok End
+  return Definition
 
 step' :: VCDParser Int
 step' = tok' $ \ a -> case a of
   Step a -> Just a
   _      -> Nothing
 
-sample :: VCDParser ()
+sample :: VCDParser (Int, [(String, Value)])
 sample = do
-  many str
-  step'
-  return ()
+  a <- values
+  i <- step'
+  return (i, a)
 
-  
+values :: VCDParser [(String, Value)]
+values = many str >>= return . values'
+
+values' :: [String] -> [(String, Value)]
+values' a = case a of
+  [] -> []
+  ('0':code):a -> (code, Bool False) : values' a
+  ('1':code):a -> (code, Bool True ) : values' a
+  ('b':bits):code:a  -> (code, Bits [ b == '1' | b <- bits ]) : values' a
+  ('r':float):code:a -> (code, Double  $ read float)  : values' a
+  (a:_) -> error $ "invalid value: " ++ a
+
