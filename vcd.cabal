@@ -3,7 +3,7 @@ version: 0.1.0
 
 category: Data
 
-synopsis: Tools for writing VCD files.
+synopsis: Tools for reading and writing VCD files.
 
 description:
   VCD (value change dump) is a format for capturing digital and analog waveforms.
