@@ -1,10 +1,11 @@
 module Data.VCD
-  ( VCD
+  ( VCDHandle
   , Timescale (..)
   , newVCD
-  , level
-  , signal
+  , scope
+  , var
   , step
+  , parseVCD
   ) where
 
 import Control.Monad
@@ -14,9 +15,11 @@ import Data.Int
 import Data.IORef
 import Data.Word
 import System.IO
+import Text.ParserCombinators.Parsec
+import Text.ParserCombinators.Parsec.Pos
 import Text.Printf
 
-data VCD = VCD
+data VCDHandle = VCDHandle
   { handle   :: Handle
   , defs     :: IORef Bool
   , dirty    :: IORef Bool
@@ -33,43 +36,43 @@ instance Show Timescale where
   show US = "us"
   show PS = "ps"
 
-assertDefs :: VCD -> IO ()
+assertDefs :: VCDHandle -> IO ()
 assertDefs vcd = do
   defs <- readIORef $ defs vcd
-  when (not defs) $ error "VCD signal definition in recording phase"
+  when (not defs) $ error "VCD variable definition in recording phase"
 
-assertNotDefs :: VCD -> IO ()
+assertNotDefs :: VCDHandle -> IO ()
 assertNotDefs vcd = do
   defs <- readIORef $ defs vcd
-  when defs $ error "VCD signal recording in definition phase"
+  when defs $ error "VCD variable recording in definition phase"
 
-nextCode :: VCD -> IO String
+nextCode :: VCDHandle -> IO String
 nextCode vcd = do
   assertDefs vcd
   codes' <- readIORef $ codes vcd
   writeIORef (codes vcd) (tail codes')
   return $ head codes'
 
-class    Signal a      where signal :: VCD -> String -> a -> IO (a -> IO ())
-instance Signal Bool   where signal = package "wire" 1 (\ a -> if a then "1" else "0")
-instance Signal Int    where signal vcd name init = package "integer" (bitSize init) bitString vcd name init
-instance Signal Int8   where signal = package "integer"  8 bitString
-instance Signal Int16  where signal = package "integer" 16 bitString
-instance Signal Int32  where signal = package "integer" 16 bitString
-instance Signal Int64  where signal = package "integer" 16 bitString
-instance Signal Word8  where signal = package "wire"     8 bitString
-instance Signal Word16 where signal = package "wire"    16 bitString
-instance Signal Word32 where signal = package "wire"    32 bitString
-instance Signal Word64 where signal = package "wire"    64 bitString
-instance Signal Float  where signal = package "real" 32 (\ a -> "r" ++ show a ++ " ")
-instance Signal Double where signal = package "real" 64 (\ a -> "r" ++ show a ++ " ")
+class    Signal a      where var :: VCDHandle -> String -> a -> IO (a -> IO ())
+instance Signal Bool   where var = package "wire" 1 (\ a -> if a then "1" else "0")
+instance Signal Int    where var vcd name init = package "integer" (bitSize init) bitString vcd name init
+instance Signal Int8   where var = package "integer"  8 bitString
+instance Signal Int16  where var = package "integer" 16 bitString
+instance Signal Int32  where var = package "integer" 16 bitString
+instance Signal Int64  where var = package "integer" 16 bitString
+instance Signal Word8  where var = package "wire"     8 bitString
+instance Signal Word16 where var = package "wire"    16 bitString
+instance Signal Word32 where var = package "wire"    32 bitString
+instance Signal Word64 where var = package "wire"    64 bitString
+instance Signal Float  where var = package "real" 32 (\ a -> "r" ++ show a ++ " ")
+instance Signal Double where var = package "real" 64 (\ a -> "r" ++ show a ++ " ")
 
 bitString :: Bits a => a -> String
 bitString n = "b" ++ (if null bits then "0" else bits) ++ " "
   where
   bits = dropWhile (== '0') $ [ if testBit n i then '1' else '0' | i <- [bitSize n - 1, bitSize n - 2 .. 0] ]
 
-package :: Eq a => String -> Int -> (a -> String) -> VCD -> String -> a -> IO (a -> IO ())
+package :: Eq a => String -> Int -> (a -> String) -> VCDHandle -> String -> a -> IO (a -> IO ())
 package typ width value vcd name init = do
   code <- nextCode vcd
   hPutStrLn (handle vcd) $ printf "$var %s %d %s %s $end" typ width code name
@@ -84,7 +87,7 @@ package typ width value vcd name init = do
   return sample
 
 
-newVCD :: Handle -> Timescale -> IO VCD
+newVCD :: Handle -> Timescale -> IO VCDHandle
 newVCD h ts = do
   hPutStrLn h $ "$timescale"
   hPutStrLn h $ "  1 " ++ show ts
@@ -94,7 +97,7 @@ newVCD h ts = do
   time     <- newIORef 0
   codes    <- newIORef identCodes
   dumpvars <- newIORef $ return ()
-  return VCD
+  return VCDHandle
     { handle   = h
     , defs     = defs
     , dirty    = dirty
@@ -103,14 +106,14 @@ newVCD h ts = do
     , dumpvars = dumpvars
     }
 
-level :: VCD -> String -> IO a -> IO a
-level vcd name a = do
+scope :: VCDHandle -> String -> IO a -> IO a
+scope vcd name a = do
   hPutStrLn (handle vcd) $ "$scope module " ++ name ++ " $end"
   a <- a
   hPutStrLn (handle vcd) $ "$upscope $end"
   return a
 
-step :: VCD -> Int -> IO ()
+step :: VCDHandle -> Int -> IO ()
 step vcd n = do
   defs'     <- readIORef $ defs     vcd
   dumpvars' <- readIORef $ dumpvars vcd
@@ -136,3 +139,104 @@ identCodes = map code [0..]
   code i | i < 94 =           [chr (33 + mod i 94)] 
   code i = code (div i 94) ++ [chr (33 + mod i 94)] 
 
+data Token
+  = End
+  | Timescale
+  | Scope
+  | Var
+  | UpScope
+  | EndDefinitions
+  | DumpVars
+  | Step Int
+  | String String
+  deriving (Show, Eq)
+
+type VCDParser = GenParser Token ()
+
+data VCD = VCD deriving Show
+
+parseVCD :: String -> Either ParseError VCD
+parseVCD = parse vcd "unknown" . map token . words
+  where
+  token a = case a of
+    "$end"                -> End
+    "$timescale"          -> Timescale
+    "$scope"              -> Scope
+    "$var"                -> Var
+    "$upscope"            -> UpScope
+    "$enddefinitions"     -> EndDefinitions
+    "$dumpvars"           -> DumpVars
+    '#':a | not (null a) && all isDigit a -> Step $ read a
+    a                     -> String a
+
+noPos :: a -> SourcePos
+noPos _ = initialPos "unknown"
+
+tok' = token show noPos
+tok a = tok' (\ b -> if a == b then Just () else Nothing)
+str = tok' $ \ a -> case a of
+  String a -> Just a
+  _        -> Nothing
+
+vcd :: VCDParser VCD
+vcd = do
+  ts <- timescale
+  defs <- definitions
+  tok EndDefinitions
+  tok End
+  tok DumpVars
+  many str
+  tok End
+  step'
+  many sample
+  eof
+  return VCD
+
+timescale :: VCDParser Timescale
+timescale = do
+  tok Timescale
+  one <- str
+  sc  <- str
+  tok End
+  when (one /= "1") $ error $ "invalid timescale: " ++ one
+  case sc of
+    "s"  -> return S
+    "ms" -> return MS
+    "us" -> return US
+    "ps" -> return PS
+    _    -> error $ "invalid timescale: " ++ sc
+
+definitions :: VCDParser [()]
+definitions = many $ scope' <|> var'
+
+scope' :: VCDParser ()
+scope' = do
+  tok Scope
+  str
+  name <- str
+  tok End
+  defs <- definitions
+  tok UpScope
+  tok End
+
+var' :: VCDParser ()
+var' = do
+  tok Var
+  typ   <- str
+  width <- str
+  code  <- str
+  name  <- str
+  tok End
+
+step' :: VCDParser Int
+step' = tok' $ \ a -> case a of
+  Step a -> Just a
+  _      -> Nothing
+
+sample :: VCDParser ()
+sample = do
+  many str
+  step'
+  return ()
+
+  
