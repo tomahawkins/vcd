@@ -4,9 +4,10 @@ module Data.VCD
   -- * VCD Generation
     VCDHandle
   , Timescale (..)
+  , Variable (..)
+  , variable
   , newVCD
   , scope
-  , var
   , step
   -- * VCD Parsing
   , VCD        (..)
@@ -26,6 +27,7 @@ import Text.ParserCombinators.Parsec
 import Text.ParserCombinators.Parsec.Pos
 import Text.Printf
 
+-- | The VCDHandle keeps track of generation state and the output handle.
 data VCDHandle = VCDHandle
   { handle   :: Handle
   , defs     :: IORef Bool
@@ -35,7 +37,12 @@ data VCDHandle = VCDHandle
   , dumpvars :: IORef (IO ())
   }
 
-data Timescale = S | MS | US | PS
+-- | VCD Timescale.
+data Timescale
+  = S     -- ^ seconds
+  | MS    -- ^ milliseconds
+  | US    -- ^ microseconds
+  | PS    -- ^ picoseconds
 
 instance Show Timescale where
   show S  = "s"
@@ -60,27 +67,32 @@ nextCode vcd = do
   writeIORef (codes vcd) (tail codes')
   return $ head codes'
 
-class    Signal a      where var :: VCDHandle -> String -> a -> IO (a -> IO ())
-instance Signal Bool   where var = package "wire" 1 (\ a -> if a then "1" else "0")
-instance Signal Int    where var vcd name init = package "integer" (bitSize init) bitString vcd name init
-instance Signal Int8   where var = package "integer"  8 bitString
-instance Signal Int16  where var = package "integer" 16 bitString
-instance Signal Int32  where var = package "integer" 16 bitString
-instance Signal Int64  where var = package "integer" 16 bitString
-instance Signal Word8  where var = package "wire"     8 bitString
-instance Signal Word16 where var = package "wire"    16 bitString
-instance Signal Word32 where var = package "wire"    32 bitString
-instance Signal Word64 where var = package "wire"    64 bitString
-instance Signal Float  where var = package "real" 32 (\ a -> "r" ++ show a ++ " ")
-instance Signal Double where var = package "real" 64 (\ a -> "r" ++ show a ++ " ")
+-- | Types that can be recorded as VCD variables.
+class Variable a where
+  -- | Define a new variable.
+  var :: VCDHandle -> String -> a -> IO (a -> IO ())
+
+instance Variable Bool   where var = variable "wire" 1 (\ a -> if a then "1" else "0")
+instance Variable Int    where var vcd name init = variable "integer" (bitSize init) bitString vcd name init
+instance Variable Int8   where var = variable "integer"  8 bitString
+instance Variable Int16  where var = variable "integer" 16 bitString
+instance Variable Int32  where var = variable "integer" 16 bitString
+instance Variable Int64  where var = variable "integer" 16 bitString
+instance Variable Word8  where var = variable "wire"     8 bitString
+instance Variable Word16 where var = variable "wire"    16 bitString
+instance Variable Word32 where var = variable "wire"    32 bitString
+instance Variable Word64 where var = variable "wire"    64 bitString
+instance Variable Float  where var = variable "real" 32 (\ a -> "r" ++ show a ++ " ")
+instance Variable Double where var = variable "real" 64 (\ a -> "r" ++ show a ++ " ")
 
 bitString :: Bits a => a -> String
 bitString n = "b" ++ (if null bits then "0" else bits) ++ " "
   where
   bits = dropWhile (== '0') $ [ if testBit n i then '1' else '0' | i <- [bitSize n - 1, bitSize n - 2 .. 0] ]
 
-package :: Eq a => String -> Int -> (a -> String) -> VCDHandle -> String -> a -> IO (a -> IO ())
-package typ width value vcd name init = do
+-- | Helper to create new 'Variable' instances.
+variable :: Eq a => String -> Int -> (a -> String) -> VCDHandle -> String -> a -> IO (a -> IO ())
+variable typ width value vcd name init = do
   code <- nextCode vcd
   hPutStrLn (handle vcd) $ printf "$var %s %d %s %s $end" typ width code name
   last <- newIORef Nothing
@@ -94,6 +106,7 @@ package typ width value vcd name init = do
   return sample
 
 
+-- | Create a new handle for generating a VCD file with a given timescale.
 newVCD :: Handle -> Timescale -> IO VCDHandle
 newVCD h ts = do
   hPutStrLn h $ "$timescale"
@@ -113,6 +126,7 @@ newVCD h ts = do
     , dumpvars = dumpvars
     }
 
+-- | Define a hierarchical scope.
 scope :: VCDHandle -> String -> IO a -> IO a
 scope vcd name a = do
   hPutStrLn (handle vcd) $ "$scope module " ++ name ++ " $end"
@@ -120,6 +134,7 @@ scope vcd name a = do
   hPutStrLn (handle vcd) $ "$upscope $end"
   return a
 
+-- | Set a time step.  'step' will also transition a VCDHandle from the definition to the recording phase.
 step :: VCDHandle -> Int -> IO ()
 step vcd n = do
   defs'     <- readIORef $ defs     vcd
@@ -146,11 +161,23 @@ identCodes = map code [0..]
   code i | i < 94 =           [chr (33 + mod i 94)] 
   code i = code (div i 94) ++ [chr (33 + mod i 94)] 
 
+-- | VCD database.
+data VCD = VCD Timescale [Definition] [(Int, [(String, Value)])] deriving Show
+
+-- | Recorded value.
+data Value = Bool Bool | Bits [Bool] | Double Double deriving Show
+
+-- | Variable definition.
+data Definition
+  = Scope String [Definition]     -- ^ Hierarchical scope.
+  | Var String Int String String  -- ^ Variable with type, width, code, name.
+  deriving Show
+
 data Token
   = End
   | Timescale
   | Scope'
-  | Var
+  | Var'
   | UpScope
   | EndDefinitions
   | DumpVars
@@ -170,7 +197,7 @@ parseVCD a = case parse vcd "unknown" $ map token $ words a of
     "$end"                -> End
     "$timescale"          -> Timescale
     "$scope"              -> Scope'
-    "$var"                -> Var
+    "$var"                -> Var'
     "$upscope"            -> UpScope
     "$enddefinitions"     -> EndDefinitions
     "$dumpvars"           -> DumpVars
@@ -185,13 +212,6 @@ tok a = tok' (\ b -> if a == b then Just () else Nothing)
 str = tok' $ \ a -> case a of
   String a -> Just a
   _        -> Nothing
-
-data VCD = VCD Timescale [Definition] [(Int, [(String, Value)])] deriving Show
-
-data Value = Bool Bool | Bits [Bool] | Double Double deriving Show
-
---data Definition = Scope String [Definition] | Var String
-data Definition = Definition deriving Show
 
 vcd :: VCDParser VCD
 vcd = do
@@ -233,17 +253,17 @@ scope' = do
   defs <- definitions
   tok UpScope
   tok End
-  return Definition
+  return $ Scope name defs
 
 var' :: VCDParser Definition
 var' = do
-  tok Var
+  tok Var'
   typ   <- str
   width <- str
   code  <- str
   name  <- str
   tok End
-  return Definition
+  return $ Var typ (read width) code name
 
 step' :: VCDParser Int
 step' = tok' $ \ a -> case a of
