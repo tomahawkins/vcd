@@ -1,5 +1,5 @@
 name:    vcd
-version: 0.1.0
+version: 0.1.1
 
 category: Data
 
@@ -22,7 +22,7 @@ cabal-version: >= 1.6
 
 library
     build-depends:
-        base       >= 4.2 && < 5,
+        base       >= 4.0 && < 5.0,
         parsec     >= 2.1
 
     exposed-modules:
