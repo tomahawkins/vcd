@@ -145,13 +145,14 @@ step vcd n = do
     hPutStrLn (handle vcd) "$dumpvars"
     dumpvars'
     hPutStrLn (handle vcd) "$end"
+    writeIORef (dirty vcd) True
 
+  t <- readIORef $ time vcd
+  writeIORef (time vcd) $ t + n
   dirty' <- readIORef $ dirty vcd
   when dirty' $ do
-    t <- readIORef $ time vcd
     hPutStrLn (handle vcd) $ "#" ++ show (t + n)
     writeIORef (dirty vcd) False
-    writeIORef (time vcd) $ t + n
     hFlush $ handle vcd
 
 identCodes :: [String]
