@@ -9,6 +9,7 @@ module Data.VCD
   , newVCD
   , scope
   , step
+  , step'
   -- * VCD Parsing
   , VCD        (..)
   , Definition (..)
@@ -155,6 +156,24 @@ step vcd n = do
     writeIORef (dirty vcd) False
     hFlush $ handle vcd
 
+-- | Save as 'step', but forces a step recording even if variables have not changed.  Useful for realtime simulation.
+step' :: VCDHandle -> Int -> IO ()
+step' vcd n = do
+  defs'     <- readIORef $ defs     vcd
+  dumpvars' <- readIORef $ dumpvars vcd
+  when defs' $ do
+    writeIORef (defs vcd) False
+    hPutStrLn (handle vcd) "$enddefinitions $end"
+    hPutStrLn (handle vcd) "$dumpvars"
+    dumpvars'
+    hPutStrLn (handle vcd) "$end"
+    writeIORef (dirty vcd) True
+
+  t <- readIORef $ time vcd
+  writeIORef (time vcd) $ t + n
+  hPutStrLn (handle vcd) $ "#" ++ show (t + n)
+  hFlush $ handle vcd
+
 identCodes :: [String]
 identCodes = map code [0..]
   where
@@ -208,9 +227,9 @@ parseVCD a = case parse vcd "unknown" $ map token $ words a of
 noPos :: a -> SourcePos
 noPos _ = initialPos "unknown"
 
-tok' = token show noPos
-tok a = tok' (\ b -> if a == b then Just () else Nothing)
-str = tok' $ \ a -> case a of
+tok_ = token show noPos
+tok a = tok_ (\ b -> if a == b then Just () else Nothing)
+str = tok_ $ \ a -> case a of
   String a -> Just a
   _        -> Nothing
 
@@ -223,7 +242,7 @@ vcd = do
   tok DumpVars
   initValues <- values
   tok End
-  initTime <- step'
+  initTime <- step_
   samples <- many sample >>= return . ((initTime, initValues):)
   eof
   return $ VCD ts defs samples
@@ -243,10 +262,10 @@ timescale = do
     _    -> error $ "invalid timescale: " ++ sc
 
 definitions :: VCDParser [Definition]
-definitions = many $ scope' <|> var'
+definitions = many $ scope_ <|> var_
 
-scope' :: VCDParser Definition
-scope' = do
+scope_ :: VCDParser Definition
+scope_ = do
   tok Scope'
   str
   name <- str
@@ -256,8 +275,8 @@ scope' = do
   tok End
   return $ Scope name defs
 
-var' :: VCDParser Definition
-var' = do
+var_ :: VCDParser Definition
+var_ = do
   tok Var'
   typ   <- str
   width <- str
@@ -266,15 +285,15 @@ var' = do
   tok End
   return $ Var typ (read width) code name
 
-step' :: VCDParser Int
-step' = tok' $ \ a -> case a of
+step_ :: VCDParser Int
+step_ = tok_ $ \ a -> case a of
   Step a -> Just a
   _      -> Nothing
 
 sample :: VCDParser (Int, [(String, Value)])
 sample = do
   a <- values
-  i <- step'
+  i <- step_
   return (i, a)
 
 values :: VCDParser [(String, Value)]
