@@ -24,8 +24,7 @@ import Data.Int
 import Data.IORef
 import Data.Word
 import System.IO
-import Text.ParserCombinators.Parsec
-import Text.ParserCombinators.Parsec.Pos
+import Text.ParserCombinators.Poly.Lazy
 import Text.Printf
 
 -- | The VCDHandle keeps track of generation state and the output handle.
@@ -135,9 +134,8 @@ scope vcd name a = do
   hPutStrLn (handle vcd) $ "$upscope $end"
   return a
 
--- | Set a time step.  'step' will also transition a VCDHandle from the definition to the recording phase.
-step :: VCDHandle -> Int -> IO ()
-step vcd n = do
+stepInit :: VCDHandle -> IO ()
+stepInit vcd = do
   defs'     <- readIORef $ defs     vcd
   dumpvars' <- readIORef $ dumpvars vcd
   when defs' $ do
@@ -148,6 +146,10 @@ step vcd n = do
     hPutStrLn (handle vcd) "$end"
     writeIORef (dirty vcd) True
 
+-- | Set a time step.  'step' will also transition a VCDHandle from the definition to the recording phase.
+step :: VCDHandle -> Int -> IO ()
+step vcd n = do
+  stepInit vcd
   t <- readIORef $ time vcd
   writeIORef (time vcd) $ t + n
   dirty' <- readIORef $ dirty vcd
@@ -159,16 +161,7 @@ step vcd n = do
 -- | Save as 'step', but forces a step recording even if variables have not changed.  Useful for realtime simulation.
 step' :: VCDHandle -> Int -> IO ()
 step' vcd n = do
-  defs'     <- readIORef $ defs     vcd
-  dumpvars' <- readIORef $ dumpvars vcd
-  when defs' $ do
-    writeIORef (defs vcd) False
-    hPutStrLn (handle vcd) "$enddefinitions $end"
-    hPutStrLn (handle vcd) "$dumpvars"
-    dumpvars'
-    hPutStrLn (handle vcd) "$end"
-    writeIORef (dirty vcd) True
-
+  stepInit vcd
   t <- readIORef $ time vcd
   writeIORef (time vcd) $ t + n
   hPutStrLn (handle vcd) $ "#" ++ show (t + n)
@@ -205,13 +198,11 @@ data Token
   | String String
   deriving (Show, Eq)
 
-type VCDParser = GenParser Token ()
+type VCDParser = Parser Token
 
 -- | Parse VCD data.
 parseVCD :: String -> VCD
-parseVCD a = case parse vcd "unknown" $ map token $ words a of
-  Left err -> error $ show err
-  Right vcd -> vcd
+parseVCD a = fst $ runParser vcd $ map token $ words a
   where
   token a = case a of
     "$end"                -> End
@@ -224,36 +215,33 @@ parseVCD a = case parse vcd "unknown" $ map token $ words a of
     '#':a | not (null a) && all isDigit a -> Step $ read a
     a                     -> String a
 
-noPos :: a -> SourcePos
-noPos _ = initialPos "unknown"
+tok :: Token -> VCDParser ()
+tok a = satisfy (== a) >> return ()
 
-tok_ = token show noPos
-tok a = tok_ (\ b -> if a == b then Just () else Nothing)
-str = tok_ $ \ a -> case a of
-  String a -> Just a
-  _        -> Nothing
+str :: VCDParser String
+str = do
+  String sc <- satisfy (\ a -> case a of { String _ -> True; _ -> False })
+  return sc
 
 vcd :: VCDParser VCD
-vcd = do
-  ts <- timescale
-  defs <- definitions
-  tok EndDefinitions
-  tok End
-  tok DumpVars
-  initValues <- values
-  tok End
-  initTime <- step_
-  samples <- many sample >>= return . ((initTime, initValues):)
-  eof
-  return $ VCD ts defs samples
+vcd = return (\ ts defs initValues initTime samples -> VCD ts defs $ (initTime, initValues) : samples)
+  `apply`   timescale
+  `apply`   definitions
+  `discard` tok EndDefinitions
+  `discard` tok End
+  `discard` tok DumpVars
+  `apply`   values
+  `discard` tok End
+  `apply`   step_
+  `apply`   many sample
+  `discard` eof
 
 timescale :: VCDParser Timescale
 timescale = do
   tok Timescale
-  one <- str
-  sc  <- str
+  tok $ String "1"
+  sc <- str
   tok End
-  when (one /= "1") $ error $ "invalid timescale: " ++ one
   case sc of
     "s"  -> return S
     "ms" -> return MS
@@ -262,7 +250,7 @@ timescale = do
     _    -> error $ "invalid timescale: " ++ sc
 
 definitions :: VCDParser [Definition]
-definitions = many $ scope_ <|> var_
+definitions = many $ oneOf [scope_, var_]
 
 scope_ :: VCDParser Definition
 scope_ = do
@@ -286,9 +274,9 @@ var_ = do
   return $ Var typ (read width) code name
 
 step_ :: VCDParser Int
-step_ = tok_ $ \ a -> case a of
-  Step a -> Just a
-  _      -> Nothing
+step_ = do
+  Step a <- satisfy (\ a -> case a of { Step _ -> True; _ -> False })
+  return a
 
 sample :: VCDParser (Int, [(String, Value)])
 sample = do
