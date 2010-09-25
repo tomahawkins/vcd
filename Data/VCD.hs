@@ -7,7 +7,6 @@ module Data.VCD
   , Variable (..)
   , variable
   , newVCD
-  , scope
   , step
   , step'
   -- * VCD Parsing
@@ -22,6 +21,7 @@ import Data.Bits
 import Data.Char
 import Data.Int
 import Data.IORef
+import Data.TreeCtor
 import Data.Word
 import System.IO
 import Text.ParserCombinators.Poly.Lazy
@@ -35,6 +35,7 @@ data VCDHandle = VCDHandle
   , time     :: IORef Int
   , codes    :: IORef [String]
   , dumpvars :: IORef (IO ())
+  , vars     :: IORef [(String, Int, String, [String])] -- ^ (typ, width, code, path)
   }
 
 -- | VCD Timescale.
@@ -70,7 +71,7 @@ nextCode vcd = do
 -- | Types that can be recorded as VCD variables.
 class Variable a where
   -- | Define a new variable.
-  var :: VCDHandle -> String -> a -> IO (a -> IO ())
+  var :: VCDHandle -> [String] -> a -> IO (a -> IO ())
 
 instance Variable Bool   where var = variable "wire" 1 (\ a -> if a then "1" else "0")
 instance Variable Int    where var vcd name init = variable "integer" (bitSize init) bitString vcd name init
@@ -91,10 +92,10 @@ bitString n = "b" ++ (if null bits then "0" else bits) ++ " "
   bits = dropWhile (== '0') $ [ if testBit n i then '1' else '0' | i <- [bitSize n - 1, bitSize n - 2 .. 0] ]
 
 -- | Helper to create new 'Variable' instances.
-variable :: Eq a => String -> Int -> (a -> String) -> VCDHandle -> String -> a -> IO (a -> IO ())
-variable typ width value vcd name init = do
+variable :: Eq a => String -> Int -> (a -> String) -> VCDHandle -> [String] -> a -> IO (a -> IO ())
+variable typ width value vcd path init = do
   code <- nextCode vcd
-  hPutStrLn (handle vcd) $ printf "$var %s %d %s %s $end" typ width code name
+  modifyIORef (vars vcd) ((typ, width, code, path) :)
   last <- newIORef Nothing
   let sample a = do assertNotDefs vcd
                     last' <- readIORef last
@@ -117,6 +118,7 @@ newVCD h ts = do
   time     <- newIORef 0
   codes    <- newIORef identCodes
   dumpvars <- newIORef $ return ()
+  vars     <- newIORef []
   return VCDHandle
     { handle   = h
     , defs     = defs
@@ -124,27 +126,30 @@ newVCD h ts = do
     , time     = time
     , codes    = codes
     , dumpvars = dumpvars
+    , vars     = vars
     }
-
--- | Define a hierarchical scope.
-scope :: VCDHandle -> String -> IO a -> IO a
-scope vcd name a = do
-  hPutStrLn (handle vcd) $ "$scope module " ++ name ++ " $end"
-  a <- a
-  hPutStrLn (handle vcd) $ "$upscope $end"
-  return a
 
 stepInit :: VCDHandle -> IO ()
 stepInit vcd = do
   defs'     <- readIORef $ defs     vcd
   dumpvars' <- readIORef $ dumpvars vcd
+  vars'     <- readIORef $ vars     vcd
   when defs' $ do
     writeIORef (defs vcd) False
+    mapM_ (defineVar $ handle vcd) $ tree (\ (_, _, _, a) -> a) vars'
     hPutStrLn (handle vcd) "$enddefinitions $end"
     hPutStrLn (handle vcd) "$dumpvars"
     dumpvars'
     hPutStrLn (handle vcd) "$end"
     writeIORef (dirty vcd) True
+
+defineVar :: Handle -> Tree String (String, Int, String, [String]) -> IO ()
+defineVar h a = case a of
+  Branch name subs -> do
+    hPutStrLn h $ "$scope module " ++ name ++ " $end"
+    mapM_ (defineVar h) subs
+    hPutStrLn h $ "$upscope $end"
+  Leaf name (typ, width, code, _) -> hPutStrLn h $ printf "$var %s %d %s %s $end" typ width code name
 
 -- | Set a time step.  'step' will also transition a VCDHandle from the definition to the recording phase.
 step :: VCDHandle -> Int -> IO ()
