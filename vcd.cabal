@@ -6,8 +6,8 @@ category: Data, Hardware, Embedded
 synopsis: Reading and writing VCD files.
 
 description:
-  VCD (value change dump) is a format for capturing digital and analog waveforms.
-  GTKWave is a popular viewer of VCD files.
+  Defined by the Verilog standard, VCD (value change dump) is a file format for
+  capturing digital and analog waveforms, typically from HDL simulation.
 
 author:     Tom Hawkins <tomahawkins@gmail.com>
 maintainer: Tom Hawkins <tomahawkins@gmail.com>
@@ -23,8 +23,8 @@ cabal-version: >= 1.6
 library
     build-depends:
         base       >= 4.0   && < 5.0,
-        tree-ctor  >= 0.0.0 && < 0.1,
-        polyparse  >= 1.4
+        polyparse  >= 1.4   && < 1.5,
+        improve    >= 0.1.0 && < 0.2
 
     exposed-modules:
         Data.VCD

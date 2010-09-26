@@ -21,8 +21,8 @@ import Data.Bits
 import Data.Char
 import Data.Int
 import Data.IORef
-import Data.TreeCtor
 import Data.Word
+import Language.ImProve.Tree
 import System.IO
 import Text.ParserCombinators.Poly.Lazy
 import Text.Printf
