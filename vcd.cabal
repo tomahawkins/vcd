@@ -1,5 +1,5 @@
 name:    vcd
-version: 0.2.1
+version: 0.2.2
 
 category: Data, Hardware, Embedded
 
@@ -18,20 +18,20 @@ license-file: LICENSE
 homepage: http://tomahawkins.org
 
 build-type:    Simple
-cabal-version: >= 1.6
+cabal-version: >= 1.8
 
 library
-    build-depends:
-        base       >= 4.0   && < 5.0,
-        polyparse  >= 1.4   && < 1.6,
-        improve    >= 0.1.0 && < 0.2
+  build-depends:
+   base       >= 4.0 && < 5.0,
+   polyparse  >= 1.4 && < 2.0
 
-    exposed-modules:
-        Data.VCD
+  exposed-modules:
+    Data.VCD
+    Data.VCD.Tree
 
-    ghc-options:       -W
+  ghc-options: -W
 
 source-repository head
-    type:     git
-    location: git://github.com/tomahawkins/vcd.git
+  type:     git
+  location: git://github.com/tomahawkins/vcd.git
 

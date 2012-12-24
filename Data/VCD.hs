@@ -22,10 +22,11 @@ import Data.Char
 import Data.Int
 import Data.IORef
 import Data.Word
-import Language.ImProve.Tree
 import System.IO
 import Text.ParserCombinators.Poly.Lazy
 import Text.Printf
+
+import Data.VCD.Tree
 
 -- | The VCDHandle keeps track of generation state and the output handle.
 data VCDHandle = VCDHandle
