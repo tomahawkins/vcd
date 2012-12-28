@@ -19,9 +19,7 @@ module Data.VCD
 import Control.Monad
 import Data.Bits
 import Data.Char
-import Data.Int
 import Data.IORef
-import Data.Word
 import System.IO
 import Text.ParserCombinators.Poly.Lazy
 import Text.Printf
@@ -74,16 +72,8 @@ class Variable a where
   -- | Define a new variable.
   var :: VCDHandle -> [String] -> a -> IO (a -> IO ())
 
-instance Variable Bool   where var = variable "wire" 1 (\ a -> if a then "1" else "0")
-instance Variable Int    where var vcd name init = variable "integer" (bitSize init) bitString vcd name init
-instance Variable Int8   where var = variable "integer"  8 bitString
-instance Variable Int16  where var = variable "integer" 16 bitString
-instance Variable Int32  where var = variable "integer" 16 bitString
-instance Variable Int64  where var = variable "integer" 16 bitString
-instance Variable Word8  where var = variable "wire"     8 bitString
-instance Variable Word16 where var = variable "wire"    16 bitString
-instance Variable Word32 where var = variable "wire"    32 bitString
-instance Variable Word64 where var = variable "wire"    64 bitString
+instance Bits a => Variable a where var vcd path init = variable (if isSigned init then "integer" else "wire") (bitSize init) bitString vcd path init
+instance Variable Bool   where var = variable "wire"  1 (\ a -> if a then "1" else "0")
 instance Variable Float  where var = variable "real" 32 (\ a -> "r" ++ show a ++ " ")
 instance Variable Double where var = variable "real" 64 (\ a -> "r" ++ show a ++ " ")
 
@@ -106,7 +96,6 @@ variable typ width value vcd path init = do
                       writeIORef (dirty vcd) True
   modifyIORef (dumpvars vcd) (\ a -> a >> sample init)
   return sample
-
 
 -- | Create a new handle for generating a VCD file with a given timescale.
 newVCD :: Handle -> Timescale -> IO VCDHandle

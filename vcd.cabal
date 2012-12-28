@@ -1,5 +1,5 @@
 name:    vcd
-version: 0.2.2
+version: 0.3.0
 
 category: Data, Hardware, Embedded
 
@@ -29,6 +29,7 @@ library
     Data.VCD
     Data.VCD.Tree
 
+  extensions: FlexibleInstances, UndecidableInstances
   ghc-options: -W
 
 source-repository head
