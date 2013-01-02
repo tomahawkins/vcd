@@ -20,6 +20,7 @@ import Control.Monad
 import Data.Bits
 import Data.Char
 import Data.IORef
+import Data.List
 import System.IO
 import Text.ParserCombinators.Poly.Lazy
 import Text.Printf
@@ -53,12 +54,12 @@ instance Show Timescale where
 assertDefs :: VCDHandle -> IO ()
 assertDefs vcd = do
   defs <- readIORef $ defs vcd
-  when (not defs) $ error "VCD variable definition in recording phase"
+  when (not defs) $ error "VCD variable definition in recording phase."
 
 assertNotDefs :: VCDHandle -> IO ()
 assertNotDefs vcd = do
   defs <- readIORef $ defs vcd
-  when defs $ error "VCD variable recording in definition phase"
+  when defs $ error "VCD variable recording in definition phase."
 
 nextCode :: VCDHandle -> IO String
 nextCode vcd = do
@@ -84,18 +85,21 @@ bitString n = "b" ++ (if null bits then "0" else bits) ++ " "
 
 -- | Helper to create new 'Variable' instances.
 variable :: Eq a => String -> Int -> (a -> String) -> VCDHandle -> [String] -> a -> IO (a -> IO ())
-variable typ width value vcd path init = do
-  code <- nextCode vcd
-  modifyIORef (vars vcd) ((typ, width, code, path) :)
-  last <- newIORef Nothing
-  let sample a = do assertNotDefs vcd
-                    last' <- readIORef last
-                    when (last' /= Just a) $ do
-                      hPutStrLn (handle vcd) $ value a ++ code
-                      writeIORef last $ Just a
-                      writeIORef (dirty vcd) True
-  modifyIORef (dumpvars vcd) (\ a -> a >> sample init)
-  return sample
+variable typ width value vcd path init
+  | width <= 0 = error $ "Non-positive width (" ++ show width ++ ") for signal " ++ intercalate "." path ++ "."
+  | otherwise = do
+    assertDefs vcd
+    code <- nextCode vcd
+    modifyIORef (vars vcd) ((typ, width, code, path) :)
+    last <- newIORef Nothing
+    let sample a = do assertNotDefs vcd
+                      last' <- readIORef last
+                      when (last' /= Just a) $ do
+                        hPutStrLn (handle vcd) $ value a ++ code
+                        writeIORef last $ Just a
+                        writeIORef (dirty vcd) True
+    modifyIORef (dumpvars vcd) (>> sample init)
+    return sample
 
 -- | Create a new handle for generating a VCD file with a given timescale.
 newVCD :: Handle -> Timescale -> IO VCDHandle
