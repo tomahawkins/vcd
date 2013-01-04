@@ -7,6 +7,7 @@ module Data.VCD
   , Variable (..)
   , variable
   , newVCD
+  , handle
   , step
   , step'
   -- * VCD Parsing
