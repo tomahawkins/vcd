@@ -13,7 +13,7 @@ module Data.VCD
   -- * VCD Parsing
   , VCD        (..)
   , Definition (..)
-  , Value      (..)
+  , Bit        (..)
   , parseVCD
   ) where
 
@@ -22,6 +22,7 @@ import Data.Bits
 import Data.Char
 import Data.IORef
 import Data.List
+import Data.Maybe
 import System.IO
 import Text.ParserCombinators.Poly.Lazy
 import Text.Printf
@@ -176,24 +177,63 @@ identCodes = map code [0..]
   code i | i < 94 =           [chr (33 + mod i 94)] 
   code i = code (div i 94) ++ [chr (33 + mod i 94)] 
 
--- | VCD database.
-data VCD = VCD String [Definition] [(Int, [(String, Value)])] deriving Show
 
--- | Recorded value.
-data Value
-  = Bits [Bit]
-  | Double Double
-  deriving Show
 
-data Bit = H | L | X | Z deriving Show
+-- | VCD database for parsing and pretty printing.
+data VCD = VCD String [Definition] [(Int, [(String, [Bit])])]
+
+instance Show VCD where
+  show (VCD ts defs samples) = unlines $
+    [unwords ["$timescale", ts ,"$end"]] ++
+    concatMap showDefinition defs ++
+    ["$enddefinitions $end"] ++
+    showSamples samples 
 
 -- | Variable definition.
 data Definition
   = Scope String [Definition]     -- ^ Hierarchical scope.
-  | Var String Int String String  -- ^ Variable with type, width, code, name.
+  | Var String Int String String (Maybe String)  -- ^ Variable: type, width, code, name, optional bit range.
   | Comment String
-  deriving Show
 
+showDefinition :: Definition -> [String]
+showDefinition a = case a of
+  Scope name defs ->
+    [unwords ["$scope", "module", name, "$end"]] ++
+    indent (concatMap showDefinition defs) ++
+    ["$upscope $end"]
+  Var type' width code name range -> [unwords ["$var", type', show width, code, name, maybe "" id range, "$end"]]
+  Comment msg -> [unwords ["$comment", msg, "$end"]]
+  where
+  indent :: [String] -> [String]
+  indent = map ("  " ++)
+
+data Bit = H | L | X | Z
+
+showSamples :: [(Int, [(String, [Bit])])] -> [String]
+showSamples a = case a of
+  [] -> []
+  a : rest -> showSample True a ++ concatMap (showSample False) rest
+
+showSample :: Bool -> (Int, [(String, [Bit])]) -> [String]
+showSample first (step, values) =
+  [ "#" ++ show step ] ++
+  (if first then ["$dumpvars"] else []) ++
+  map showValue values ++
+  (if first then ["$end"] else [])
+
+showValue :: (String, [Bit]) -> String
+showValue (name, bits) = case bits of
+  [a] -> showBit a : name
+  a   -> "b" ++ map showBit a ++ " " ++ name
+  where
+  showBit a = case a of
+    H -> '1'
+    L -> '0'
+    X -> 'x'
+    Z -> 'z'
+
+
+-- Parser tokens.
 data Token
   = End
   | Timescale
@@ -274,19 +314,19 @@ var_ :: VCDParser Definition
 var_ = do
   tok Var'
   typ   <- str
-  width <- str
+  width <- str >>= return . read
   code  <- str
   name  <- str
-  upto 1 str
+  range <- upto 1 str >>= return . listToMaybe
   tok End
-  return $ Var typ (read width) code name
+  return $ Var typ width code name range
 
 step_ :: VCDParser Int
 step_ = do
   Step a <- satisfy (\ a -> case a of { Step _ -> True; _ -> False })
   return a
 
-sample :: VCDParser (Int, [(String, Value)])
+sample :: VCDParser (Int, [(String, [Bit])])
 sample = do
   i <- step_
   upto 1 $ tok DumpVars
@@ -294,15 +334,15 @@ sample = do
   upto 1 $ tok End
   return (i, a)
 
-values :: VCDParser [(String, Value)]
+values :: VCDParser [(String, [Bit])]
 values = many str >>= return . values'
 
-values' :: [String] -> [(String, Value)]
+values' :: [String] -> [(String, [Bit])]
 values' a = case a of
   [] -> []
-  (b:code):a | elem b "01xz" -> (code, Bits [toBit b]) : values' a
-  ('b':bits):code:a  -> (code, Bits (map toBit bits)) : values' a
-  ('r':float):code:a -> (code, Double  $ read float)  : values' a
+  (b:code):a | elem b "01xz" -> (code, [toBit b]) : values' a
+  ('b':bits):code:a  -> (code, map toBit bits) : values' a
+  --('r':float):code:a -> (code, Double  $ read float)  : values' a
   (a:_) -> error $ "invalid value: " ++ a
   where
   toBit a = case a of
