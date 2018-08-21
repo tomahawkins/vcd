@@ -45,12 +45,14 @@ data Timescale
   | MS    -- ^ milliseconds
   | US    -- ^ microseconds
   | PS    -- ^ picoseconds
+  | FS
 
 instance Show Timescale where
   show S  = "s"
   show MS = "ms"
   show US = "us"
   show PS = "ps"
+  show FS = "fs"
 
 assertDefs :: VCDHandle -> IO ()
 assertDefs vcd = do
@@ -74,15 +76,15 @@ class Variable a where
   -- | Define a new variable.
   var :: VCDHandle -> [String] -> a -> IO (a -> IO ())
 
-instance Bits a => Variable a where var vcd path init = variable (if isSigned init then "integer" else "wire") (bitSize init) bitString vcd path init
+instance FiniteBits a => Variable a where var vcd path init = variable (if isSigned init then "integer" else "wire") (finiteBitSize init) bitString vcd path init
 instance Variable Bool   where var = variable "wire"  1 (\ a -> if a then "1" else "0")
 instance Variable Float  where var = variable "real" 32 (\ a -> "r" ++ show a ++ " ")
 instance Variable Double where var = variable "real" 64 (\ a -> "r" ++ show a ++ " ")
 
-bitString :: Bits a => a -> String
+bitString :: FiniteBits a => a -> String
 bitString n = "b" ++ (if null bits then "0" else bits) ++ " "
   where
-  bits = dropWhile (== '0') $ [ if testBit n i then '1' else '0' | i <- [bitSize n - 1, bitSize n - 2 .. 0] ]
+  bits = dropWhile (== '0') $ [ if testBit n i then '1' else '0' | i <- [finiteBitSize n - 1, finiteBitSize n - 2 .. 0] ]
 
 -- | Helper to create new 'Variable' instances.
 variable :: Eq a => String -> Int -> (a -> String) -> VCDHandle -> [String] -> a -> IO (a -> IO ())
@@ -175,7 +177,7 @@ identCodes = map code [0..]
   code i = code (div i 94) ++ [chr (33 + mod i 94)] 
 
 -- | VCD database.
-data VCD = VCD Timescale [Definition] [(Int, [(String, Value)])] deriving Show
+data VCD = VCD String [Definition] [(Int, [(String, Value)])] deriving Show
 
 -- | Recorded value.
 data Value = Bool Bool | Bits [Bool] | Double Double deriving Show
@@ -184,6 +186,7 @@ data Value = Bool Bool | Bits [Bool] | Double Double deriving Show
 data Definition
   = Scope String [Definition]     -- ^ Hierarchical scope.
   | Var String Int String String  -- ^ Variable with type, width, code, name.
+  | Comment String
   deriving Show
 
 data Token
@@ -196,6 +199,7 @@ data Token
   | DumpVars
   | Step Int
   | String String
+  | Comment'
   deriving (Show, Eq)
 
 type VCDParser = Parser Token
@@ -212,45 +216,43 @@ parseVCD a = fst $ runParser vcd $ map token $ words a
     "$upscope"            -> UpScope
     "$enddefinitions"     -> EndDefinitions
     "$dumpvars"           -> DumpVars
+    "$comment"            -> Comment'
     '#':a | not (null a) && all isDigit a -> Step $ read a
     a                     -> String a
 
 tok :: Token -> VCDParser ()
-tok a = satisfy (== a) >> return ()
+tok a = flip satisfyMsg "tok" (== a) >> return ()
 
 str :: VCDParser String
 str = do
-  String sc <- satisfy (\ a -> case a of { String _ -> True; _ -> False })
+  String sc <- flip satisfyMsg "str" (\ a -> case a of { String _ -> True; _ -> False })
   return sc
 
 vcd :: VCDParser VCD
-vcd = return (\ ts defs initValues initTime samples -> VCD ts defs $ (initTime, initValues) : samples)
+vcd = return (\ ts defs samples -> VCD ts defs samples)
   `apply`   timescale
   `apply`   definitions
   `discard` tok EndDefinitions
   `discard` tok End
-  `discard` tok DumpVars
-  `apply`   values
-  `discard` tok End
-  `apply`   step_
   `apply`   many sample
   `discard` eof
 
-timescale :: VCDParser Timescale
+timescale :: VCDParser String
 timescale = do
   tok Timescale
-  tok $ String "1"
   sc <- str
   tok End
-  case sc of
-    "s"  -> return S
-    "ms" -> return MS
-    "us" -> return US
-    "ps" -> return PS
-    _    -> error $ "invalid timescale: " ++ sc
+  return sc
 
 definitions :: VCDParser [Definition]
-definitions = many $ oneOf [scope_, var_]
+definitions = many $ oneOf [scope_, var_, comment]
+
+comment :: VCDParser Definition
+comment = do
+  tok Comment'
+  words <- many str
+  tok End
+  return $ Comment $ unwords words
 
 scope_ :: VCDParser Definition
 scope_ = do
@@ -270,6 +272,7 @@ var_ = do
   width <- str
   code  <- str
   name  <- str
+  upto 1 str
   tok End
   return $ Var typ (read width) code name
 
@@ -280,8 +283,10 @@ step_ = do
 
 sample :: VCDParser (Int, [(String, Value)])
 sample = do
-  a <- values
   i <- step_
+  upto 1 $ tok DumpVars
+  a <- values
+  upto 1 $ tok End
   return (i, a)
 
 values :: VCDParser [(String, Value)]
