@@ -180,7 +180,12 @@ identCodes = map code [0..]
 data VCD = VCD String [Definition] [(Int, [(String, Value)])] deriving Show
 
 -- | Recorded value.
-data Value = Bool Bool | Bits [Bool] | Double Double deriving Show
+data Value
+  = Bits [Bit]
+  | Double Double
+  deriving Show
+
+data Bit = H | L | X | Z deriving Show
 
 -- | Variable definition.
 data Definition
@@ -295,9 +300,15 @@ values = many str >>= return . values'
 values' :: [String] -> [(String, Value)]
 values' a = case a of
   [] -> []
-  ('0':code):a -> (code, Bool False) : values' a
-  ('1':code):a -> (code, Bool True ) : values' a
-  ('b':bits):code:a  -> (code, Bits [ b == '1' | b <- bits ]) : values' a
+  (b:code):a | elem b "01xz" -> (code, Bits [toBit b]) : values' a
+  ('b':bits):code:a  -> (code, Bits (map toBit bits)) : values' a
   ('r':float):code:a -> (code, Double  $ read float)  : values' a
   (a:_) -> error $ "invalid value: " ++ a
+  where
+  toBit a = case a of
+    '0' -> L
+    '1' -> H
+    'x' -> X
+    'z' -> Z
+    a -> error $ "Unexpected bit: " ++ [a]
 
