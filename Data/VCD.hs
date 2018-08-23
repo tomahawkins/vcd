@@ -15,6 +15,10 @@ module Data.VCD
   , Definition (..)
   , Bit        (..)
   , parseVCD
+  -- * VCD Utils
+  , vcdCodes
+  , vcdCode
+  , vcdCode'
   ) where
 
 import Control.Monad
@@ -114,7 +118,7 @@ newVCD h ts = do
   defs     <- newIORef True
   dirty    <- newIORef True
   time     <- newIORef 0
-  codes    <- newIORef identCodes
+  codes    <- newIORef vcdCodes
   dumpvars <- newIORef $ return ()
   vars     <- newIORef []
   return VCDHandle
@@ -170,24 +174,38 @@ step' vcd n = do
   hPutStrLn (handle vcd) $ "#" ++ show (t + n)
   hFlush $ handle vcd
 
-identCodes :: [String]
-identCodes = map code [0..]
+-- | All VCD signal codes.
+vcdCodes :: [String]
+vcdCodes = map vcdCode [0 ..]
+
+-- | Mapping an Int to a VCD code.
+vcdCode :: Int -> String
+vcdCode i
+  | i < 94    =                       [chr (33 +     i   )] 
+  | otherwise = vcdCode (div i 94) ++ [chr (33 + mod i 94)] 
+
+-- | Mapping a VCD code back to an Int.
+vcdCode' :: String -> Int
+vcdCode' = f 0
   where
-  code :: Int -> String
-  code i | i < 94 =           [chr (33 + mod i 94)] 
-  code i = code (div i 94) ++ [chr (33 + mod i 94)] 
+  f :: Int -> String -> Int
+  f sofar a = case a of
+    [] -> sofar
+    a : rest -> f (sofar * 94 + ord a - 33) rest
+  
 
 
 
 -- | VCD database for parsing and pretty printing.
-data VCD = VCD String [Definition] [(Int, [(String, [Bit])])]
+data VCD = VCD String [Definition] [(Int, [(String, [Bit])])] Int
 
 instance Show VCD where
-  show (VCD ts defs samples) = unlines $
+  show (VCD ts defs samples end) = unlines $
     [unwords ["$timescale", ts ,"$end"]] ++
     concatMap showDefinition defs ++
     ["$enddefinitions $end"] ++
-    showSamples samples 
+    showSamples samples ++
+    ["#" ++ show end]
 
 -- | Variable definition.
 data Definition
@@ -207,7 +225,7 @@ showDefinition a = case a of
   indent :: [String] -> [String]
   indent = map ("  " ++)
 
-data Bit = H | L | X | Z
+data Bit = H | L | X | Z deriving Eq
 
 showSamples :: [(Int, [(String, [Bit])])] -> [String]
 showSamples a = case a of
@@ -274,7 +292,7 @@ str = do
   return sc
 
 vcd :: VCDParser VCD
-vcd = return (\ ts defs samples -> VCD ts defs samples)
+vcd = return (\ ts defs samples -> VCD ts defs (init samples) (fst $ last samples))
   `apply`   timescale
   `apply`   definitions
   `discard` tok EndDefinitions
